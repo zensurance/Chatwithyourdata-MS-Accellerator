@@ -1,6 +1,5 @@
 import os
 import sys
-import traceback
 import json
 import jsonschema
 import streamlit as st
@@ -8,6 +7,7 @@ from batch.utilities.helpers.env_helper import EnvHelper
 from batch.utilities.helpers.config.config_helper import ConfigHelper
 from azure.core.exceptions import ResourceNotFoundError
 from batch.utilities.helpers.config.assistant_strategy import AssistantStrategy
+from batch.utilities.helpers.config.conversation_flow import ConversationFlow
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 env_helper: EnvHelper = EnvHelper()
@@ -66,6 +66,8 @@ if "orchestrator_strategy" not in st.session_state:
     st.session_state["orchestrator_strategy"] = config.orchestrator.strategy.value
 if "ai_assistant_type" not in st.session_state:
     st.session_state["ai_assistant_type"] = config.prompts.ai_assistant_type
+if "conversational_flow" not in st.session_state:
+    st.session_state["conversational_flow"] = config.prompts.conversational_flow
 
 if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION:
     if "max_page_length" not in st.session_state:
@@ -164,6 +166,17 @@ def validate_documents():
 
 
 try:
+    conversational_flow_help = "Whether to use the custom conversational flow or byod conversational flow. Refer to the Conversational flow options README for more details."
+    with st.expander("Conversational flow configuration", expanded=True):
+        cols = st.columns([2, 4])
+        with cols[0]:
+            conv_flow = st.selectbox(
+                "Conversational flow",
+                key="conversational_flow",
+                options=config.get_available_conversational_flows(),
+                help=conversational_flow_help,
+            )
+
     with st.expander("Orchestrator configuration", expanded=True):
         cols = st.columns([2, 4])
         with cols[0]:
@@ -171,6 +184,12 @@ try:
                 "Orchestrator strategy",
                 key="orchestrator_strategy",
                 options=config.get_available_orchestration_strategies(),
+                disabled=(
+                    True
+                    if st.session_state["conversational_flow"]
+                    == ConversationFlow.BYOD.value
+                    else False
+                ),
             )
 
     # # # condense_question_prompt_help = "This prompt is used to convert the user's input to a standalone question, using the context of the chat history."
@@ -287,124 +306,134 @@ try:
             disabled=not st.session_state["use_on_your_data_format"],
         )
 
-    document_processors = list(
-        map(
-            lambda x: {
-                "document_type": x.document_type,
-                "chunking_strategy": (
-                    x.chunking.chunking_strategy.value if x.chunking else None
-                ),
-                "chunking_size": x.chunking.chunk_size if x.chunking else None,
-                "chunking_overlap": x.chunking.chunk_overlap if x.chunking else None,
-                "loading_strategy": (
-                    x.loading.loading_strategy.value if x.loading else None
-                ),
-                "use_advanced_image_processing": x.use_advanced_image_processing,
-            },
-            config.document_processors,
-        )
-    )
-
-    if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION:
-        with st.expander("Integrated Vectorization configuration", expanded=True):
-            st.text_input("Max Page Length", key="max_page_length")
-            st.text_input("Page Overlap Length", key="page_overlap_length")
-            integrated_vectorization_config = {
-                "max_page_length": st.session_state["max_page_length"],
-                "page_overlap_length": st.session_state["page_overlap_length"],
-            }
-
-    else:
-        with st.expander("Document processing configuration", expanded=True):
-            edited_document_processors = st.data_editor(
-                data=document_processors,
-                use_container_width=True,
-                num_rows="dynamic",
-                column_config={
-                    "document_type": st.column_config.SelectboxColumn(
-                        options=config.get_available_document_types()
+    with st.form("config_form", border=False):
+        document_processors = list(
+            map(
+                lambda x: {
+                    "document_type": x.document_type,
+                    "chunking_strategy": (
+                        x.chunking.chunking_strategy.value if x.chunking else None
                     ),
-                    "chunking_strategy": st.column_config.SelectboxColumn(
-                        options=[
-                            cs for cs in config.get_available_chunking_strategies()
-                        ]
+                    "chunking_size": x.chunking.chunk_size if x.chunking else None,
+                    "chunking_overlap": (
+                        x.chunking.chunk_overlap if x.chunking else None
                     ),
-                    "loading_strategy": st.column_config.SelectboxColumn(
-                        options=[ls for ls in config.get_available_loading_strategies()]
+                    "loading_strategy": (
+                        x.loading.loading_strategy.value if x.loading else None
                     ),
+                    "use_advanced_image_processing": x.use_advanced_image_processing,
                 },
+                config.document_processors,
             )
-
-    with st.expander("Logging configuration", expanded=True):
-        st.checkbox(
-            "Log user input and output (questions, answers, chat history, sources)",
-            key="log_user_interactions",
         )
-        st.checkbox("Log tokens", key="log_tokens")
 
-    if st.button("Save configuration"):
-        document_processors = (
-            list(
-                map(
-                    lambda x: {
-                        "document_type": x["document_type"],
-                        "chunking": {
-                            "strategy": x["chunking_strategy"],
-                            "size": x["chunking_size"],
-                            "overlap": x["chunking_overlap"],
-                        },
-                        "loading": {
-                            "strategy": x["loading_strategy"],
-                        },
-                        "use_advanced_image_processing": x[
-                            "use_advanced_image_processing"
-                        ],
+        if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION:
+            with st.expander("Integrated Vectorization configuration", expanded=True):
+                st.text_input("Max Page Length", key="max_page_length")
+                st.text_input("Page Overlap Length", key="page_overlap_length")
+                integrated_vectorization_config = {
+                    "max_page_length": st.session_state["max_page_length"],
+                    "page_overlap_length": st.session_state["page_overlap_length"],
+                }
+
+        else:
+            with st.expander("Document processing configuration", expanded=True):
+                edited_document_processors = st.data_editor(
+                    data=document_processors,
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    column_config={
+                        "document_type": st.column_config.SelectboxColumn(
+                            options=config.get_available_document_types()
+                        ),
+                        "chunking_strategy": st.column_config.SelectboxColumn(
+                            options=[
+                                cs for cs in config.get_available_chunking_strategies()
+                            ]
+                        ),
+                        "loading_strategy": st.column_config.SelectboxColumn(
+                            options=[
+                                ls for ls in config.get_available_loading_strategies()
+                            ]
+                        ),
                     },
-                    edited_document_processors,
                 )
+
+        with st.expander("Logging configuration", expanded=True):
+            st.checkbox(
+                "Log user input and output (questions, answers, chat history, sources)",
+                key="log_user_interactions",
             )
-            if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION is False
-            else []
-        )
-        current_config = {
-            "prompts": {
-                "condense_question_prompt": "",  # st.session_state['condense_question_prompt'],
-                "answering_system_prompt": st.session_state["answering_system_prompt"],
-                "answering_user_prompt": st.session_state["answering_user_prompt"],
-                "use_on_your_data_format": st.session_state["use_on_your_data_format"],
-                "post_answering_prompt": st.session_state["post_answering_prompt"],
-                "enable_post_answering_prompt": st.session_state[
-                    "enable_post_answering_prompt"
-                ],
-                "enable_content_safety": st.session_state["enable_content_safety"],
-                "ai_assistant_type": st.session_state["ai_assistant_type"],
-            },
-            "messages": {
-                "post_answering_filter": st.session_state[
-                    "post_answering_filter_message"
-                ]
-            },
-            "example": {
-                "documents": st.session_state["example_documents"],
-                "user_question": st.session_state["example_user_question"],
-                "answer": st.session_state["example_answer"],
-            },
-            "document_processors": document_processors,
-            "logging": {
-                "log_user_interactions": st.session_state["log_user_interactions"],
-                "log_tokens": st.session_state["log_tokens"],
-            },
-            "orchestrator": {"strategy": st.session_state["orchestrator_strategy"]},
-            "integrated_vectorization_config": (
-                integrated_vectorization_config
-                if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION
-                else None
-            ),
-        }
-        ConfigHelper.save_config_as_active(current_config)
-        st.success(
-            "Configuration saved successfully! Please restart the chat service for these changes to take effect."
-        )
+            st.checkbox("Log tokens", key="log_tokens")
+
+        if st.form_submit_button("Save configuration"):
+            document_processors = (
+                list(
+                    map(
+                        lambda x: {
+                            "document_type": x["document_type"],
+                            "chunking": {
+                                "strategy": x["chunking_strategy"],
+                                "size": x["chunking_size"],
+                                "overlap": x["chunking_overlap"],
+                            },
+                            "loading": {
+                                "strategy": x["loading_strategy"],
+                            },
+                            "use_advanced_image_processing": x[
+                                "use_advanced_image_processing"
+                            ],
+                        },
+                        edited_document_processors,
+                    )
+                )
+                if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION is False
+                else []
+            )
+            current_config = {
+                "prompts": {
+                    "condense_question_prompt": "",  # st.session_state['condense_question_prompt'],
+                    "answering_system_prompt": st.session_state[
+                        "answering_system_prompt"
+                    ],
+                    "answering_user_prompt": st.session_state["answering_user_prompt"],
+                    "use_on_your_data_format": st.session_state[
+                        "use_on_your_data_format"
+                    ],
+                    "post_answering_prompt": st.session_state["post_answering_prompt"],
+                    "enable_post_answering_prompt": st.session_state[
+                        "enable_post_answering_prompt"
+                    ],
+                    "enable_content_safety": st.session_state["enable_content_safety"],
+                    "ai_assistant_type": st.session_state["ai_assistant_type"],
+                    "conversational_flow": st.session_state["conversational_flow"],
+                },
+                "messages": {
+                    "post_answering_filter": st.session_state[
+                        "post_answering_filter_message"
+                    ]
+                },
+                "example": {
+                    "documents": st.session_state["example_documents"],
+                    "user_question": st.session_state["example_user_question"],
+                    "answer": st.session_state["example_answer"],
+                },
+                "document_processors": document_processors,
+                "logging": {
+                    "log_user_interactions": st.session_state["log_user_interactions"],
+                    "log_tokens": st.session_state["log_tokens"],
+                },
+                "orchestrator": {"strategy": st.session_state["orchestrator_strategy"]},
+                "integrated_vectorization_config": (
+                    integrated_vectorization_config
+                    if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION
+                    else None
+                ),
+            }
+            ConfigHelper.save_config_as_active(current_config)
+            st.success(
+                "Configuration saved successfully! Please restart the chat service for these changes to take effect."
+            )
 
     with st.popover(":red[Reset configuration to defaults]"):
 
@@ -438,5 +467,5 @@ try:
             del st.session_state["reset"]
             del st.session_state["reset_configuration"]
 
-except Exception:
-    st.error(traceback.format_exc())
+except Exception as e:
+    st.error(e)
